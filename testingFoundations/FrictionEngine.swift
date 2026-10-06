@@ -44,7 +44,10 @@ struct ExistingChallengesTool: Tool {
     let description = "Returns the titles of the mental friction challenges already accepted for this task, to avoid repetition."
     let context: FrictionContext
 
-    func call(arguments: GeneratedContent) async throws -> String {
+    @Generable
+    struct Arguments {}
+
+    func call(arguments: Arguments) async throws -> String {
         guard !context.existingChallengeTitles.isEmpty else {
             return "No challenge has been accepted for this task yet."
         }
@@ -102,8 +105,8 @@ final class FrictionEngine {
 
         // TEMPORARY DIAGNOSTIC round 2: @Generable structured generation, but NO tools —
         // isolates whether it's specifically tool calling that fails.
-        let activeSession = LanguageModelSession(instructions: frictionInstructions)
-        session = activeSession
+        // let activeSession = LanguageModelSession(instructions: frictionInstructions)
+        // session = activeSession
 
         let prompt = """
         Task: \(task.title)
@@ -113,8 +116,10 @@ final class FrictionEngine {
 
         var options = GenerationOptions()
         options.temperature = creativity
-
-        await stream(activeSession.streamResponse(to: prompt, generating: FrictionPlan.self, options: options))
+        
+        if let current = session {
+            await stream(current.streamResponse(to: prompt, generating: FrictionPlan.self, options: options))
+        }
     }
 
     /// Reuses the same session, asking the model to escalate the difficulty of the current plan.
