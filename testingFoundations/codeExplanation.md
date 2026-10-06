@@ -357,6 +357,275 @@ Primeiro temos uma struct da view, que serve para mostrar um desafio, tendo algu
     }
 }
 ```
-Podemos ver aqui que temos uma sobrecarga de construtores, onde podemos ter uma construcao parcial ou totalmente construida, e para isso precisamos entender outro elemento:
+Podemos ver aqui que temos uma sobrecarga de construtores, onde podemos ter uma construcao parcial ou totalmente construida, caso voce ainda nao tenha entendido, o partiallyGenerated e um estado de qualquer struct @generable que voce pode usar o elemento enquanto parcialmente gerado, no nosso caso aqui podemos pegar os valores necessarios pro display desde o resultado totalmente gerado ao resultado parcialmente gerado.
+Depois temos nossa View completa:
+```
+struct TaskDetailView: View {
+    let task: TaskItem
 
+    @State private var engine = FrictionEngine()
+    @State private var creativity: Double = 0.6
 
+    var body: some View {
+        List {
+            Section("Task") {
+                if !task.notes.isEmpty {
+                    Text(task.notes)
+                        .foregroundStyle(.secondary)
+                }
+                VStack(alignment: .leading) {
+                    Text("Creativity")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Slider(value: $creativity, in: 0.1...1.0)
+                }
+                availabilityMessage
+            }
+
+            resultSections
+
+            if !task.savedChallenges.isEmpty {
+                Section("Saved") {
+                    ForEach(task.savedChallenges) { saved in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Image(systemName: saved.type.symbolName)
+                                Text(saved.title).font(.headline)
+                            }
+                            Text(saved.instruction)
+                                .font(.subheadline)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle(task.title)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                generateButton
+            }
+        }
+        .task {
+            engine.prewarm(for: task)
+        }
+    }
+
+    @ViewBuilder
+    private var resultSections: some View {
+        switch engine.state {
+        case .idle:
+            EmptyView()
+        case .loading:
+            Section {
+                HStack {
+                    ProgressView()
+                    Text("Thinking about challenges...")
+                }
+            }
+        case .streaming(let partial):
+            if let analysis = partial.analysis {
+                Section("Analysis") {
+                    Text(analysis)
+                }
+            }
+            let challenges = partial.challenges ?? []
+            if !challenges.isEmpty {
+                Section("Challenges") {
+                    ForEach(Array(challenges.enumerated()), id: \.offset) { _, challenge in
+                        challengeRow(ChallengeDisplay(challenge), canAccept: false)
+                    }
+                }
+            }
+        case .finished(let plan):
+            Section("Analysis") {
+                Text(plan.analysis)
+            }
+            Section("Challenges") {
+                ForEach(plan.challenges.indices, id: \.self) { index in
+                    challengeRow(ChallengeDisplay(plan.challenges[index]), canAccept: true)
+                }
+            }
+        case .failed(let message):
+            Section {
+                Text(message)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var generateButton: some View {
+        switch engine.state {
+        case .loading, .streaming:
+            ProgressView()
+        case .finished:
+            Menu {
+                Button("Generate again", systemImage: "arrow.clockwise") {
+                    Task { await engine.generate(for: task, creativity: creativity) }
+                }
+                Button("Harder", systemImage: "flame") {
+                    Task { await engine.requestHarder() }
+                }
+            } label: {
+                Label("Generate", systemImage: "wand.and.stars")
+            }
+        default:
+            Button {
+                Task { await engine.generate(for: task, creativity: creativity) }
+            } label: {
+                Label("Generate friction", systemImage: "wand.and.stars")
+            }
+            .disabled(engine.availability != .available)
+        }
+    }
+
+    @ViewBuilder
+    private var availabilityMessage: some View {
+        if case .unavailable(let reason) = engine.availability {
+            Label(message(for: reason), systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func message(for reason: SystemLanguageModel.Availability.UnavailableReason) -> String {
+        switch reason {
+        case .deviceNotEligible:
+            return "This device isn't compatible with Apple Intelligence."
+        case .appleIntelligenceNotEnabled:
+            return "Enable Apple Intelligence in Settings to generate challenges."
+        case .modelNotReady:
+            return "The model is still being prepared on this device. Try again soon."
+        @unknown default:
+            return "Mental friction generation isn't available right now."
+        }
+    }
+
+    @ViewBuilder
+    private func challengeRow(_ challenge: ChallengeDisplay, canAccept: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                if let type = challenge.type {
+                    Image(systemName: type.symbolName)
+                }
+                Text(challenge.title ?? "Generating...")
+                    .font(.headline)
+                Spacer()
+                if let difficulty = challenge.difficulty {
+                    difficultyDots(difficulty)
+                }
+            }
+            if let instruction = challenge.instruction {
+                Text(instruction)
+            }
+            if let rationale = challenge.rationale {
+                Text(rationale)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if canAccept,
+               let title = challenge.title,
+               let instruction = challenge.instruction,
+               let type = challenge.type,
+               let difficulty = challenge.difficulty,
+               let rationale = challenge.rationale {
+                Button("Save", systemImage: "checkmark.circle") {
+                    save(title: title, instruction: instruction, type: type, difficulty: difficulty, rationale: rationale)
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+    }
+
+    private func difficultyDots(_ difficulty: Int) -> some View {
+        HStack(spacing: 2) {
+            ForEach(0..<5, id: \.self) { index in
+                Circle()
+                    .fill(index < difficulty ? Color.orange : Color.gray.opacity(0.3))
+                    .frame(width: 6, height: 6)
+            }
+        }
+    }
+
+    private func save(title: String, instruction: String, type: FrictionType, difficulty: Int, rationale: String) {
+        let challenge = SavedChallenge(title: title, instruction: instruction, type: type, difficulty: difficulty, rationale: rationale)
+        task.savedChallenges.append(challenge)
+    }
+}
+```
+
+Rebemos um item da view passada, montamos a engine e a criatividade base. Depois temos uma lista com uma section de tarefa, que tem o titulo e a nota (caso exista).
+Temos o slider de criatividade e um componente vem que e o availabilityMessage que e um label para quando o modelo nao esta disponivel. 
+Depois temos o resultSections, que serve para montar as sections a partir do estado da engine, que quando em streaming, ele monta a analise e os challenges sao montados a partir do valor parcial e sem a disponibilidade de salvar, ao terminar (finished) ele pega os valores do plano finalizado e monta.
+Fazer essa transiçao de estados com valores parciais, permite a view ficar atualizando constantemente e dar a impressao de tudo estar sendo construido.
+Tudo isso e possivel graças ao enum de valores associados que e o state da engine, que carrega cases com valores associados que sao recebidos quando o streaming processa os dados, assim a view vai respondendo a alteracao do state e vai construindo a view aos poucos.
+De maneira simples Generate -> Streaming -> atualiza o state da engine -> view atualiza (resultSections) -> repete ate finished.
+-
+-
+## Message da engine
+Nao estudei a fundo, mas isso e um tratamento de varias possibilidades de erro do modelo do device, para poder gerar mensagens de debug melhores, entao se quiser explorar mais a fundo, nao tem  muito segredo, sao varios swiches que retornam uma string explicando melhor cada caso.
+O legal aqui e que temos um #available para filtrar por versao do iOS.
+```
+private static func message(for error: Error) -> String {
+        // The framework sometimes wraps the real error inside a ToolCallError
+        // (for example, when it fails to load the model to decide whether to call the tool).
+        if let toolCallError = error as? LanguageModelSession.ToolCallError {
+            return message(for: toolCallError.underlyingError)
+        }
+
+        if #available(iOS 27.0, macOS 27.0, visionOS 27.0, *), let modelError = error as? LanguageModelError {
+            switch modelError {
+            case .contextSizeExceeded:
+                return "The conversation got too large. Tap \"Generate friction\" again to start over."
+            case .guardrailViolation:
+                return "The task's content couldn't be processed for safety reasons. Try rephrasing the title or notes."
+            case .unsupportedLanguageOrLocale:
+                return "The current language isn't supported by the model on this device."
+            case .rateLimited:
+                return "Too many requests in a short time. Wait a moment and try again."
+            case .refusal:
+                return "The model couldn't generate a response for this task. Try rephrasing."
+            default:
+                return "Couldn't generate the challenges right now. (\(modelError.localizedDescription)) [debug: \(String(describing: modelError))]"
+            }
+        }
+
+        if #available(iOS 27.0, macOS 27.0, visionOS 27.0, *), let systemError = error as? SystemLanguageModel.Error {
+            switch systemError {
+            case .assetsUnavailable:
+                return "The model is still being prepared on this device, or Apple Intelligence was disabled. Check Settings and try again. [debug: \(String(describing: systemError))]"
+            @unknown default:
+                return "Couldn't generate the challenges right now. (\(systemError.localizedDescription)) [debug: \(String(describing: systemError))]"
+            }
+        }
+
+        // iOS 26 (before LanguageModelError existed) throws this type instead.
+        if let generationError = error as? LanguageModelSession.GenerationError {
+            switch generationError {
+            case .exceededContextWindowSize:
+                return "The conversation got too large. Tap \"Generate friction\" again to start over."
+            case .guardrailViolation:
+                return "The task's content couldn't be processed for safety reasons. Try rephrasing the title or notes."
+            case .unsupportedLanguageOrLocale:
+                return "The current language isn't supported by the model on this device."
+            case .rateLimited:
+                return "Too many requests in a short time. Wait a moment and try again."
+            case .refusal:
+                return "The model couldn't generate a response for this task. Try rephrasing."
+            case .assetsUnavailable:
+                return "The model is still being prepared on this device. Try again soon. [debug: \(String(describing: generationError))]"
+            case .decodingFailure, .unsupportedGuide:
+                return "The model generated a response in an unexpected format. Tap \"Generate friction\" again."
+            @unknown default:
+                return "Couldn't generate the challenges right now. (\(generationError.localizedDescription)) [debug: \(String(describing: generationError))]"
+            }
+        }
+
+        let description = error.localizedDescription
+        if description.localizedCaseInsensitiveContains("asset") {
+            return "The on-device model isn't available right now (model resources unavailable). Check that Apple Intelligence is enabled in Settings, that the device isn't in Low Power Mode, and try again in a bit. [debug: \(String(describing: error))]"
+        }
+
+        return "Couldn't generate the challenges right now. (\(description)) [debug: \(String(describing: error))]"
+    }
+```
